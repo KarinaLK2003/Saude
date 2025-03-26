@@ -134,7 +134,6 @@ pyngrok==7.2.3
 pyogrio==0.10.0
 pyparsing==3.1.2
 pyproj==3.7.0
-pyspark==3.5.3
 python-dateutil==2.9.0.post0
 pytz==2024.1
 PyWavelets==1.7.0
