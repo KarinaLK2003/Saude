@@ -86,5 +86,8 @@ def update_barplot(_):
     fig.update_layout(title="Total Medication Cost Per Year", xaxis_title="Year", yaxis_title="Total Cost")
     return fig
 
+# Expose the server object for Gunicorn
+server = app.server
+
 if __name__ == "__main__":
     app.run_server(debug=True)
