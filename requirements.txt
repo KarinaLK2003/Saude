@@ -102,7 +102,6 @@ networkx==3.3
 newspaper3k==0.2.8
 nltk==3.9.1
 numba==0.60.0
-numpy==1.23.5
 opencv-python==4.10.0.84
 openpyxl==3.1.5
 opt-einsum==3.3.0
