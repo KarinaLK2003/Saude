@@ -1,7 +1,7 @@
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, Input, Output
+from dash import Dash, dcc, html, Input, Output, dash_table
 import dash_bootstrap_components as dbc
 
 # Load data
@@ -36,6 +36,17 @@ df_grouped["Finish"] += pd.Timedelta(days=30)
 df["Year"] = df["DATA_DISPENSA"].dt.year
 df_yearly_cost = df.groupby("Year")["VALOR"].sum().reset_index()
 
+# Create pivot table for SUM(QUANT) and SUM(VALOR) grouped by Year and TIPO_DOCUMENTO
+df_pivot = df.pivot_table(
+    index="Year", 
+    columns="TIPO_DOCUMENTO", 
+    values=["QUANT", "VALOR"], 
+    aggfunc="sum"
+).reset_index()
+
+# Rename columns for better readability
+df_pivot.columns = ["Year"] + [f"{col[0]} - {col[1]}" for col in df_pivot.columns[1:]]
+
 # Dash App
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
@@ -55,9 +66,21 @@ app.layout = dbc.Container([
         ], width=3),
     ], className="mb-4"),
 
-    # Graphs
+    # Gantt Chart
     dcc.Graph(id="gantt-chart"),
-    dcc.Graph(id="cost-barplot")
+
+    # Bar plot
+    dcc.Graph(id="cost-barplot"),
+
+    # Data Table
+    html.H4("Summary Table: Sum of QUANT & VALOR by Year and Document Type", className="mt-4"),
+    dash_table.DataTable(
+        id="summary-table",
+        columns=[{"name": col, "id": col} for col in df_pivot.columns],
+        style_table={'overflowX': 'auto'},
+        style_cell={'textAlign': 'center'},
+        page_size=10
+    )
 ])
 
 @app.callback(
@@ -65,16 +88,36 @@ app.layout = dbc.Container([
     Input("processo-dropdown", "value")
 )
 def update_gantt_chart(selected_processes):
-    filtered_df = df_grouped
-    if selected_processes:
-        filtered_df = df_grouped[df_grouped["PROCESSO"].isin(selected_processes)]
+    if not selected_processes:  # Handles None and empty list cases
+        selected_processes = df_grouped["PROCESSO"].unique().tolist()  # Show all processes if none selected
 
-    # Change the y-axis so each PROCESSO gets its own row
+    filtered_df = df_grouped[df_grouped["PROCESSO"].isin(selected_processes)]
+
+    # Generate task names
     filtered_df["Task"] = filtered_df["PROCESSO"].astype(str) + " - " + filtered_df["DESIGN_ARTIGO"]
 
-    fig = px.timeline(filtered_df, x_start="Start", x_end="Finish", y="Task", color="PROCESSO")
-    fig.update_yaxes(autorange="reversed", title="PROCESSO - DESIGN_ARTIGO")  # Update axis label
+    # Define distinct colors for each process
+    color_palette = px.colors.qualitative.Set1  # Use Set1 for different colors
+    unique_processes = filtered_df["PROCESSO"].unique()
+    color_map = {process: color_palette[i % len(color_palette)] for i, process in enumerate(unique_processes)}
+
+    # Create the timeline chart
+    fig = px.timeline(
+        filtered_df, 
+        x_start="Start", 
+        x_end="Finish", 
+        y="Task", 
+        color="PROCESSO", 
+        color_discrete_map=color_map
+    )
+
+    fig.update_yaxes(autorange="reversed", title="PROCESSO - DESIGN_ARTIGO")
+
+    # **Remove the color scale legend (if needed)**
+    fig.update_layout(coloraxis_showscale=False)
+
     return fig
+
 
 @app.callback(
     Output("cost-barplot", "figure"),
@@ -86,8 +129,12 @@ def update_barplot(_):
     fig.update_layout(title="Total Medication Cost Per Year", xaxis_title="Year", yaxis_title="Total Cost")
     return fig
 
-# Expose the server object for Gunicorn
-server = app.server
+@app.callback(
+    Output("summary-table", "data"),
+    Input("processo-dropdown", "value")
+)
+def update_table(selected_processes):
+    return df_pivot.to_dict("records")
 
 if __name__ == "__main__":
     app.run_server(debug=True)
