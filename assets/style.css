@@ -1,0 +1,15 @@
+.nav-item .nav-link {
+    background-color: #E0E0E0 !important;
+    color: black !important;
+    transition: background-color 0.3s ease-in-out;
+}
+
+.nav-item .nav-link:hover {
+    background-color: #C0C0C0 !important; /* Light gray on hover */
+    color: black !important;
+}
+
+.nav-item .nav-link.active {
+    background-color: #8D0E19 !important;
+    color: white !important;
+}
