@@ -40,7 +40,11 @@ df_yearly_cost = df.groupby("Year")["VALOR"].sum().reset_index()
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 app.layout = dbc.Container([
-    html.H1("Breast Cancer Medication Data", className="bg-secondary text-white p-2 mb-4"),
+    # Header with Logo
+    dbc.Row([
+        dbc.Col(html.Img(src="/assets/LOGOTIPO.jpg", height="60px"), width="auto"),
+        dbc.Col(html.H1("Breast Cancer Medication Data", className="bg-secondary text-white p-2 mb-4"), width=True)
+    ], align="center", className="mb-4"),  # Aligns logo and title
 
     # Sidebar with dropdown for filtering Gantt Chart
     dbc.Row([
