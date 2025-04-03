@@ -51,19 +51,11 @@ app.layout = dbc.Container([
 
         # Tabs Column (Right, Centered)
         dbc.Col([
-            dbc.Tabs([
-                
-                dbc.Tab(label="Utentes", tab_id="utentes", 
-                tab_style={"backgroundColor": "#E0E0E0", "color": "black"},  
-                active_tab_style={"backgroundColor": "#8D0E19", "color": "white"}),  
-        
-                dbc.Tab(label="Consultas", tab_id="consultas",
-                        tab_style={"backgroundColor": "#E0E0E0", "color": "black"},
-                        active_tab_style={"backgroundColor": "#8D0E19", "color": "white"}),
-
-                dbc.Tab(label="Medicação", tab_id="medicacao",
-                        tab_style={"backgroundColor": "#E0E0E0", "color": "black"},
-                        active_tab_style={"backgroundColor": "#8D0E19", "color": "white"})
+            dbc.Tabs(
+                [
+                    dbc.Tab(label="Utentes", tab_id="utentes"),
+                    dbc.Tab(label="Consultas", tab_id="consultas"),
+                    dbc.Tab(label="Medicação", tab_id="medicacao")
                 ],
                 id="tabs",
                 active_tab="medicacao"
