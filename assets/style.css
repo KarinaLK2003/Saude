@@ -1,15 +1,70 @@
-.nav-item .nav-link {
+/* Tabs Styling */
+.dash-tabs {
+    border: none !important; /* Remove any border around tabs */
+    box-shadow: none !important; /* Remove box shadow if it's present */
+    margin-bottom: 0px !important; /* Ensure no space below the tabs */
+}
+
+.nav-link {
     background-color: #E0E0E0 !important;
     color: black !important;
+    margin: 5px;
+    padding: 10px 15px;
+    border-radius: 5px;
     transition: background-color 0.3s ease-in-out;
+    font-size: 16px;
+    font-weight: 500;
 }
 
-.nav-item .nav-link:hover {
-    background-color: #C0C0C0 !important; /* Light gray on hover */
+/* Remove line beneath active tab */
+.nav-link.active {
+    background-color: #8D0E19 !important;
+    color: white !important;
+    font-weight: bold;
+    border-bottom: none !important; /* Remove bottom border */
+}
+
+/* Tabs background styling */
+.dash-tabs .nav-item {
+    margin: 0 !important; /* Ensure no space between tabs */
+}
+
+.dash-tabs .nav-link {
+    border-bottom: none !important; /* Remove the bottom border/underline */
+}
+
+/* Hover and Active State Styling */
+.nav-link:hover {
+    background-color: #C0C0C0 !important;
     color: black !important;
 }
 
-.nav-item .nav-link.active {
+.nav-link.active {
     background-color: #8D0E19 !important;
     color: white !important;
+}
+
+/* Remove underlines from active tab */
+.nav-link:focus {
+    outline: none !important; /* Remove any focus outline */
+}
+
+/* Title styling for main section */
+h1 {
+    color: white;
+    padding: 10px;
+    text-align: left;
+    margin: 0;
+    font-size: 24px;
+}
+
+/* Additional card and layout styles */
+.card-body {
+    padding: 15px;
+}
+
+/* Main content adjustments */
+.container {
+    margin: 20px auto;
+    padding: 20px;
 }
