@@ -216,6 +216,6 @@ def update_piechart(selected_processes, selected_medications, selected_years):
     fig = px.pie(df_cost_distribution, names="DESIGNACAO_FAMILIA", values="VALOR", title="Cost Distribution by Medication Family")
     return fig
 
-
+server = app.server
 if __name__ == "__main__":
     app.run_server(debug=True)
