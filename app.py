@@ -70,6 +70,27 @@ df_alerta["DATACONSULTA"] = df_alerta["DATACONSULTA"].dt.strftime("%d/%m/%Y")
 
 num_processos_alerta = df_alerta.shape[0]
 
+import re
+
+# Passo 1: Remover nomes de médicos/enfermeiros
+def remover_nomes(texto):
+    return re.sub(r'\b(DR(?:A)?\.?\s*[A-ZÁÉÍÓÚÃÕÇ]+(?:\s+[A-ZÁÉÍÓÚÃÕÇ\.]+)*)', '', texto, flags=re.IGNORECASE).strip()
+
+df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_DESC'].apply(remover_nomes)
+
+# Passo 2: Normalizar nomes abreviados
+def normalizar_descricoes(texto):
+    texto = texto.upper()
+    texto = re.sub(r'\bGERAL ONC\.?\b', 'GERAL ONCOLOGIA', texto)
+    texto = re.sub(r'\bCONS\. ENF\.?\b', 'CONSULTA ENFERMAGEM', texto)
+    texto = re.sub(r'\bONC\.?\b', 'ONCOLOGIA', texto)
+    texto = re.sub(r'\s{2,}', ' ', texto)  # Remove espaços duplos
+    return texto.strip(' -')
+
+df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_PROTECTED'].apply(normalizar_descricoes)
+
+print(df_consultas['AGENDA_PROTECTED'].unique())
+
 # Create a Dash App__________________________________________________________________________________________________________________________________________
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 
@@ -252,6 +273,7 @@ def render_tab_content(active_tab):
             ),
             html.H2("Processos sem consulta há mais de 12 meses", className="mb-4 mt-3"),
 
+
             # DataTable for consultas without a consultation in the last 12 months
             dash_table.DataTable(
                 columns=[{"name": col, "id": col} for col in df_alerta.columns],
@@ -291,20 +313,20 @@ def update_consultas_plot(selected_process):
 
     filtered_df = df_consultas[df_consultas["PROCESSO"] == selected_process]
 
-    # Create scatter plot with AGENDA_DESC as the color
+    # Create scatter plot with AGENDA_PROTECTED as the color
     fig = px.scatter(filtered_df, 
                      x="DATACONSULTA", 
                      y="CODTIPOACTIVIDADE", 
-                     color="AGENDA_DESC",  # Set color by AGENDA_DESC
+                     color="AGENDA_PROTECTED",  # Set color by AGENDA_PROTECTED
                      title=f"Consultas do Processo {selected_process}",
                      labels={"DATACONSULTA": "Data da Consulta", 
                              "CODTIPOACTIVIDADE": "Tipo de Atividade",
-                             "AGENDA_DESC": "Agenda Descrição"})
+                             "AGENDA_PROTECTED": "Agenda Descrição"})
 
     fig.update_layout(
         xaxis_title="Data da Consulta",
         yaxis_title="Tipo de Atividade",
-        showlegend=True  # Show the legend for different AGENDA_DESC values
+        showlegend=True  # Show the legend for different AGENDA_PROTECTED values
     )
 
     return fig
