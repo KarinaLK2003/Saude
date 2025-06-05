@@ -4,15 +4,71 @@ from dash import Dash, dcc, html, Input, Output, dash_table
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from sqlalchemy import create_engine
+import re
 
-# Load data
-ficheiro_excel = 'Cancro_da_Mama_dados_03-01-2025.xlsx'
-df = pd.read_excel(ficheiro_excel, sheet_name='medicação')
-df_consultas = pd.read_excel(ficheiro_excel, sheet_name='consultas realizadas marcadas')
-df_utente = pd.read_excel(ficheiro_excel, sheet_name='universo de doentes')
+#_____________________________________________________________________________________________SQL CREDENTIALS___________________________________________________________
+user = 'root'
+password = '2444666668888888'
+host = 'localhost'  
+port = '3306'       
+database = 'hospital_data'
 
+# Create connection string
+engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
+
+#_____________________________________________________________________________________________DATA FROM EXCEL TO SQL and to python__________________________________
+excel_file = 'Cancro_da_Mama_dados_03-01-2025.xlsx'
+
+# Read Excel sheets
+df_utente = pd.read_excel(excel_file, sheet_name='universo de doentes')
+df_utente.rename(columns={"DATA DIAGNÓSTICO": "DATA_DIAGNOSTICO"}, inplace=True)
+
+df_consultas = pd.read_excel(excel_file, sheet_name='consultas realizadas marcadas')
+df_consultas.drop_duplicates(inplace=True)
+df_consultas["PROCESSO"] = df_consultas["PROCESSO"].astype(str)
+df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors="coerce")
+
+df_med = pd.read_excel(excel_file, sheet_name='medicação')
+
+# Ensure PROCESSO is string to match for merging
+df_utente["PROCESSO"] = df_utente["PROCESSO"].astype(str)
+df_med["PROCESSO"] = df_med["PROCESSO"].astype(str)
+
+# 1. FILTER df_utente: remove already existing PROCESSOs
+existing_utente = pd.read_sql("SELECT PROCESSO FROM universo_de_doentes", con=engine)
+existing_utente["PROCESSO"] = existing_utente["PROCESSO"].astype(str)
+df_utente_to_insert = df_utente[~df_utente["PROCESSO"].isin(existing_utente["PROCESSO"])]
+
+# 2. INSERT new utentes first (so FK constraint is satisfied for consultas)
+if not df_utente_to_insert.empty:
+    df_utente_to_insert.to_sql('universo_de_doentes', con=engine, if_exists='append', index=False)
+
+# 3. FILTER df_consultas: remove if not matching PROCESSO in universo_de_doentes (FK constraint)
+all_processos = pd.read_sql("SELECT PROCESSO FROM universo_de_doentes", con=engine)
+all_processos["PROCESSO"] = all_processos["PROCESSO"].astype(str)
+df_consultas = df_consultas[df_consultas["PROCESSO"].isin(all_processos["PROCESSO"])]
+
+# 4. FILTER df_consultas: avoid inserting duplicates (based on PROCESSO + DATACONSULTA)
+existing_consultas = pd.read_sql("SELECT PROCESSO, DATACONSULTA FROM consultas_realizadas_marcadas", con=engine)
+existing_consultas["PROCESSO"] = existing_consultas["PROCESSO"].astype(str)
+existing_consultas["DATACONSULTA"] = pd.to_datetime(existing_consultas["DATACONSULTA"], errors="coerce")
+
+merged = df_consultas.merge(existing_consultas, on=["PROCESSO", "DATACONSULTA"], how="left", indicator=True)
+df_consultas_to_insert = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
+
+# 5. INSERT filtered consultas
+if not df_consultas_to_insert.empty:
+    df_consultas_to_insert.to_sql('consultas_realizadas_marcadas', con=engine, if_exists='append', index=False)
+
+# 6. INSERT medicação (optional filter here too if needed)
+df_med.to_sql('medicacao', con=engine, if_exists='append', index=False)
+
+# Note: Removed the duplicate to_sql() calls below that caused duplicate primary key errors!
+
+#______________________________________________________________________________________________TRATAMENTO DE DADOS__________________________________________________
 # TRATAMENTO DE MEDICAÇÃO________________________________________________________________________________________________________________________________
-df = df.drop(columns=['TRATAMENTO'])
+df = df_med.drop(columns=['TRATAMENTO'])
 df = df.loc[df["QUANT"] > 0]
 df["DATA_DISPENSA"] = pd.to_datetime(df["DATA_DISPENSA"], dayfirst=True)
 df.sort_values(by=["PROCESSO", "DESIGN_ARTIGO", "DATA_DISPENSA"], inplace=True)
@@ -42,7 +98,7 @@ df["Year"] = df["DATA_DISPENSA"].dt.year
 df_yearly_cost = df.groupby("Year")["VALOR"].sum().reset_index()
 
 # TRATAMENTO DE CONSULTAS____________________________________________________________________________________________________________________________________
-# Remover duplicados
+# Remove duplicates
 df_consultas = df_consultas.drop_duplicates()
 df_consultas = df_consultas.dropna(subset=["PROCESSO", "DATACONSULTA"])
 df_consultas["CODTIPOACTIVIDADE"] = df_consultas["CODTIPOACTIVIDADE"].fillna("DESCONHECIDO")
@@ -70,26 +126,127 @@ df_alerta["DATACONSULTA"] = df_alerta["DATACONSULTA"].dt.strftime("%d/%m/%Y")
 
 num_processos_alerta = df_alerta.shape[0]
 
-import re
-
-# Passo 1: Remover nomes de médicos/enfermeiros
+# Clean agenda descriptions
 def remover_nomes(texto):
     return re.sub(r'\b(DR(?:A)?\.?\s*[A-ZÁÉÍÓÚÃÕÇ]+(?:\s+[A-ZÁÉÍÓÚÃÕÇ\.]+)*)', '', texto, flags=re.IGNORECASE).strip()
 
 df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_DESC'].apply(remover_nomes)
 
-# Passo 2: Normalizar nomes abreviados
 def normalizar_descricoes(texto):
     texto = texto.upper()
     texto = re.sub(r'\bGERAL ONC\.?\b', 'GERAL ONCOLOGIA', texto)
     texto = re.sub(r'\bCONS\. ENF\.?\b', 'CONSULTA ENFERMAGEM', texto)
     texto = re.sub(r'\bONC\.?\b', 'ONCOLOGIA', texto)
-    texto = re.sub(r'\s{2,}', ' ', texto)  # Remove espaços duplos
+    texto = re.sub(r'\s{2,}', ' ', texto)  # Remove multiple spaces
     return texto.strip(' -')
 
 df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_PROTECTED'].apply(normalizar_descricoes)
 
-print(df_consultas['AGENDA_PROTECTED'].unique())
+print(df)
+
+#____________________________________________________________________________________________________REFRESH FUNCTIONS________________________________
+
+def get_utente_data():
+    query = "SELECT * FROM universo_de_doentes"
+    df = pd.read_sql(query, con=engine)
+
+    if "DATA_NASCIMENTO" in df.columns:
+        df["DATA_NASCIMENTO"] = pd.to_datetime(df["DATA_NASCIMENTO"], dayfirst=True)
+    if "DATA_OBITO" in df.columns:
+        df["DATA_OBITO"] = pd.to_datetime(df["DATA_OBITO"], dayfirst=True)
+
+    return df
+
+
+def get_consulta_data(df_utente, data_limite_custom=None):
+    query = "SELECT * FROM consultas_realizadas_marcadas"
+    df = pd.read_sql(query, con=engine)
+
+    df = df.drop_duplicates()
+    df = df.dropna(subset=["PROCESSO", "DATACONSULTA"])
+    df["CODTIPOACTIVIDADE"] = df["CODTIPOACTIVIDADE"].fillna("DESCONHECIDO")
+    df["PROCESSO"] = df["PROCESSO"].astype(int)
+    df["DATACONSULTA"] = pd.to_datetime(df["DATACONSULTA"], errors='coerce')
+
+    data_atual = datetime.today()
+    df = df[df["DATACONSULTA"] <= data_atual]
+
+    if "DESCTIPOACTIVIDADE" in df.columns:
+        df["DESCTIPOACTIVIDADE"] = df["DESCTIPOACTIVIDADE"].str.upper().str.strip()
+
+    df.drop(columns=[
+        'TIPO', 'ACTIVIDADE', 'MEDICO', 'DESCTIPOACTIVIDADE',
+        'NCITA', 'CODGRUPOAGENDA', 'SERVICOAGENDA'
+    ], errors='ignore', inplace=True)
+
+    # Set date limit for alerts
+    if data_limite_custom is not None:
+        data_limite = pd.to_datetime(data_limite_custom)
+    else:
+        data_limite = datetime.today() - timedelta(days=365)
+
+    # Filter valid processes
+    df_utente_filtered = df_utente[df_utente["DATA_OBITO"].isna()]
+    processos_validos = df_utente_filtered["PROCESSO"].dropna().astype(int).unique()
+
+    # Last consultation date per process
+    df_ultima_consulta = df.groupby("PROCESSO")["DATACONSULTA"].max().reset_index()
+
+    # Alert: processes without recent consultations
+    df_alerta = df_ultima_consulta[df_ultima_consulta["DATACONSULTA"] < data_limite]
+    df_alerta = df_alerta[df_alerta["PROCESSO"].isin(processos_validos)]
+    df_alerta = df_alerta.sort_values(by="DATACONSULTA", ascending=True)
+    df_alerta["DATACONSULTA"] = df_alerta["DATACONSULTA"].dt.strftime("%d/%m/%Y")
+    num_processos_alerta = df_alerta.shape[0]
+
+    # Clean agenda descriptions
+    def remover_nomes(texto):
+        return re.sub(r'\b(DR(?:A)?\.?\s*[A-ZÁÉÍÓÚÃÕÇ]+(?:\s+[A-ZÁÉÍÓÚÃÕÇ\.]+)*)', '', str(texto), flags=re.IGNORECASE).strip()
+
+    def normalizar_descricoes(texto):
+        texto = str(texto).upper()
+        texto = re.sub(r'\bGERAL ONC\.?\b', 'GERAL ONCOLOGIA', texto)
+        texto = re.sub(r'\bCONS\. ENF\.?\b', 'CONSULTA ENFERMAGEM', texto)
+        texto = re.sub(r'\bONC\.?\b', 'ONCOLOGIA', texto)
+        texto = re.sub(r'\s{2,}', ' ', texto)
+        return texto.strip(' -')
+
+    df['AGENDA_PROTECTED'] = df['AGENDA_DESC'].apply(remover_nomes)
+    df['AGENDA_PROTECTED'] = df['AGENDA_PROTECTED'].apply(normalizar_descricoes)
+
+    return df, df_alerta, num_processos_alerta
+
+
+def get_medicacao_data():
+    query = "SELECT * FROM medicacao"
+    df = pd.read_sql(query, con=engine)
+
+    df = df.drop(columns=['TRATAMENTO'], errors='ignore')
+    df = df[df["QUANT"] > 0]
+    df["DATA_DISPENSA"] = pd.to_datetime(df["DATA_DISPENSA"], dayfirst=True)
+    df.sort_values(by=["PROCESSO", "DESIGN_ARTIGO", "DATA_DISPENSA"], inplace=True)
+
+    # Continuous treatment logic
+    intervalo_maximo = 40  # days
+    df["Grupo"] = (
+        df.groupby(["PROCESSO", "DESIGN_ARTIGO"])["DATA_DISPENSA"]
+        .diff()
+        .gt(pd.Timedelta(days=intervalo_maximo))
+        .cumsum()
+    )
+
+    df_grouped = df.groupby(["PROCESSO", "DESIGN_ARTIGO", "Grupo"]).agg(
+        Start=("DATA_DISPENSA", "min"),
+        Finish=("DATA_DISPENSA", "max"),
+        Cost=("VALOR", "sum")
+    ).reset_index()
+    df_grouped["Finish"] += pd.Timedelta(days=30)
+
+    df["Year"] = df["DATA_DISPENSA"].dt.year
+    df_yearly_cost = df.groupby("Year")["VALOR"].sum().reset_index()
+
+    return df, df_grouped, df_yearly_cost
+
 
 # Create a Dash App__________________________________________________________________________________________________________________________________________
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -136,41 +293,60 @@ app.layout = dbc.Container([
             dbc.Row([dbc.Col(dcc.Graph(id="gantt-chart"), width=12)]),
         ], id="medicacao-filters"),
         id="medicacao-filters-container"
-    )
+    ),
+    dcc.Interval(id='interval-component', interval=60000*5, n_intervals=0)
 ])
 
 # CALLBACKS MEDICAÇÃO________________________________________________________________________________________________________________________________
 
+from flask_caching import Cache
 
+# Initialize cache for the app
+cache = Cache(app.server, config={'CACHE_TYPE': 'SimpleCache'})
+
+# Cache data loading functions for 5 minutes (adjust timeout as needed)
+@cache.memoize(timeout=300)
+def cached_get_medicacao_data():
+    return get_medicacao_data()
+
+@cache.memoize(timeout=300)
+def cached_get_consulta_data(df_utente, data_limite_custom=None):
+    return get_consulta_data(df_utente, data_limite_custom)
+
+# Increase interval to 60 seconds (adjust in your layout component too)
+# Example for interval-component: dcc.Interval(id='interval-component', interval=60*1000, n_intervals=0)
 
 # Callback to Show/Hide Title and Filters Based on Selected Tab
 @app.callback(
     [Output("medicacao-title", "children"),
      Output("medicacao-filters-container", "style")],
-    Input("tabs", "active_tab")
+    Input("tabs", "active_tab"),
+    Input("interval-component", "n_intervals")
 )
-def update_content(active_tab):
+def update_content(active_tab, n_intervals):
     if active_tab == "medicacao":
         return (
             html.Div(
-                html.H1("Medicação", 
+                html.H1("Medicação",
                         style={"color": "white", "margin": "0 auto", "padding": "10px", "textAlign": "left"}),
                 style={"backgroundColor": "#8D0E19", "width": "100%", "padding": "0px", "margin": "0px"}
             ),
-            {"display": "block"}  # Show the filters and graphs
+            {"display": "block"}  # Show filters and graphs
         )
     else:
-        return "", {"display": "none"}  # Hide the filters and graphs when another tab is selected
+        return "", {"display": "none"}  # Hide filters and graphs
 
-# Callbacks for updating the graphs
+# Update Barplot of Cost per Year
 @app.callback(
     Output("barplot-cost-year", "figure"),
     Input("processo-dropdown", "value"),
     Input("medicamento-dropdown", "value"),
-    Input("year-dropdown", "value")
+    Input("year-dropdown", "value"),
+    Input("interval-component", "n_intervals")
 )
-def update_cost_barplot(selected_processes, selected_medications, selected_years):
-    filtered_df = df.copy()
+def update_cost_barplot(selected_processes, selected_medications, selected_years, n_intervals):
+    filtered_df = get_medicacao_data()[0]
+    df_yearly_cost = get_medicacao_data()[2]
 
     # Filter based on selections
     if selected_processes:
@@ -186,65 +362,61 @@ def update_cost_barplot(selected_processes, selected_medications, selected_years
     fig = px.bar(df_yearly_cost, x="Year", y="VALOR", title="Total de medicamentos por ano")
     return fig
 
-
+# Update Gantt Chart
 @app.callback(
     Output("gantt-chart", "figure"),
-    Input("tabs", "active_tab"),  # Trigger the callback when the active tab changes
-    Input("processo-dropdown", "value"),  # Input for filtering by selected processes
-
-    Input("medicamento-dropdown", "value")  # Input for filtering by selected medicamentos
+    Input("tabs", "active_tab"),
+    Input("processo-dropdown", "value"),
+    Input("medicamento-dropdown", "value"),
+    Input("interval-component", "n_intervals")
 )
-def update_gantt_chart(active_tab, selected_processes, selected_medications):
-    # Check if the active tab is 'medicacao', if not, return an empty figure
-    if active_tab != "medicacao":  
+def update_gantt_chart(active_tab, selected_processes, selected_medications, n_intervals):
+    if active_tab != "medicacao":
         return go.Figure()
 
-    # If no specific process is selected, show all processes
-    if not selected_processes:  
-        selected_processes = df_grouped["PROCESSO"].unique().tolist()  
+    _, df_grouped, _ = cached_get_medicacao_data()
 
-    # Filter the data based on the selected processes
+    # If no process selected, show all
+    if not selected_processes:
+        selected_processes = df_grouped["PROCESSO"].unique().tolist()
+
     filtered_df = df_grouped[df_grouped["PROCESSO"].isin(selected_processes)]
 
-    # Filter by selected medication(s) if provided
     if selected_medications:
         filtered_df = filtered_df[filtered_df["DESIGN_ARTIGO"].isin(selected_medications)]
 
-    # Create task names for the Gantt chart (combining process and medication design)
+    filtered_df = filtered_df.copy()
     filtered_df["Task"] = filtered_df["PROCESSO"].astype(str) + " - " + filtered_df["DESIGN_ARTIGO"]
 
-    # Define distinct colors for each process
-    color_palette = px.colors.qualitative.Set1  # A set of qualitative colors
+    color_palette = px.colors.qualitative.Set1
     unique_processes = filtered_df["PROCESSO"].unique()
     color_map = {process: color_palette[i % len(color_palette)] for i, process in enumerate(unique_processes)}
 
-    # Create the Gantt chart using plotly express
     fig = px.timeline(
-        filtered_df, 
-        x_start="Start", 
-        x_end="Finish", 
-        y="Task", 
-        color="PROCESSO", 
-        color_discrete_map=color_map  # Color mapping by process
+        filtered_df,
+        x_start="Start",
+        x_end="Finish",
+        y="Task",
+        color="PROCESSO",
+        color_discrete_map=color_map
     )
-
-    # Reverse the y-axis for proper Gantt chart layout (top-to-bottom task order)
     fig.update_yaxes(autorange="reversed", title="Processo - Medicamento")
-    fig.update_layout(coloraxis_showscale=False)  # Remove color scale legend
+    fig.update_layout(coloraxis_showscale=False)
 
     return fig
 
-
+# Update Pie Chart Cost Distribution
 @app.callback(
     Output("piechart-cost-distribution", "figure"),
     Input("processo-dropdown", "value"),
     Input("medicamento-dropdown", "value"),
-    Input("year-dropdown", "value")
+    Input("year-dropdown", "value"),
+    Input("interval-component", "n_intervals")
 )
-def update_piechart(selected_processes, selected_medications, selected_years):
-    filtered_df = df.copy()
+def update_piechart(selected_processes, selected_medications, selected_years, n_intervals):
+    df, _, _ = cached_get_medicacao_data()
 
-    # Filter based on selections
+    filtered_df = df
     if selected_processes:
         filtered_df = filtered_df[filtered_df["PROCESSO"].isin(selected_processes)]
     if selected_medications:
@@ -252,88 +424,162 @@ def update_piechart(selected_processes, selected_medications, selected_years):
     if selected_years:
         filtered_df = filtered_df[filtered_df["Year"].isin(selected_years)]
 
-    # Group by family or medication type for the pie chart
     df_cost_distribution = filtered_df.groupby("TIPO_DOCUMENTO")["VALOR"].sum().reset_index()
 
     fig = px.pie(df_cost_distribution, names="TIPO_DOCUMENTO", values="VALOR", title="Distribuição do custo por tipo de documento")
     return fig
 
-# Callback for rendering content in the consultas tab
+# Render Tab Content
 @app.callback(
     Output("tab-content", "children"),
-    Input("tabs", "active_tab")
+    Input("tabs", "active_tab"),
 )
 def render_tab_content(active_tab):
     if active_tab == "consultas":
         return html.Div([
             html.Div(
-                html.H1("Consultas", 
+                html.H1("Consultas",
                         style={"color": "white", "margin": "0 auto", "padding": "10px", "textAlign": "left"}),
                 style={"backgroundColor": "#8D0E19", "width": "100%", "padding": "0px", "margin": "0px"}
             ),
-            html.H2("Processos sem consulta há mais de 12 meses", className="mb-4 mt-3"),
 
+            dbc.Row([
+                dbc.Col([
+                    html.Label("Selecione a data limite para última consulta:"),
+                    dcc.DatePickerSingle(
+                        id="consulta-date-picker",
+                        date=pd.Timestamp.today().date(),
+                        display_format='YYYY-MM-DD',
+                        placeholder="Escolha a data"
+                    ),
+                    dcc.Checklist(
+                        id="include-deceased-checklist",
+                        options=[{"label": " Incluir pacientes falecidos", "value": "include"}],
+                        value=[],
+                        style={"marginTop": "10px"}
+                    )
+                ], width=4)
+            ], className="mb-3"),
 
-            # DataTable for consultas without a consultation in the last 12 months
             dash_table.DataTable(
-                columns=[{"name": col, "id": col} for col in df_alerta.columns],
-                data=df_alerta.to_dict("records"),
+                id="alerta-table",
+                columns=[],
+                data=[],
                 style_table={"overflowX": "auto"},
                 style_cell={"textAlign": "left", "padding": "5px"},
                 style_header={"backgroundColor": "#f5f5f5", "fontWeight": "bold"},
                 page_size=10
             ),
 
-            # Dropdown to filter by PROCESSO
             dbc.Row([
-                dbc.Col([  # Ensure this dropdown is part of the consultas tab
-                    html.Label("Selecione o Processo:"),
+                dbc.Col([
+                    html.Label("Selecione o Processo (sem consulta após a data escolhida):"),
                     dcc.Dropdown(
-                        id="processo-dropdown-consultas",  # Correct ID
-                        options=[{"label": str(p), "value": p} for p in df_consultas["PROCESSO"].unique()],
+                        id="processo-dropdown-consultas",
+                        options=[],
                         multi=False,
                         placeholder="Select Processo"
                     )
                 ], width=4)
             ], className="mb-4"),
 
-            # Add a plot for consultations of the selected process
-            dcc.Graph(id="consultas-plot")  # Correct ID
+            dcc.Graph(id="consultas-plot")
         ])
-    return None
 
-# Callback for consultas plot
+# Update Alert Dropdown and Table
+@app.callback(
+    Output("processo-dropdown-consultas", "options"),
+    Output("alerta-table", "columns"),
+    Output("alerta-table", "data"),
+    Input("consulta-date-picker", "date"),
+    Input("include-deceased-checklist", "value"),
+    Input("interval-component", "n_intervals")
+)
+def update_alerta_dropdown_and_table(selected_date, include_deceased_values, n_intervals):
+    if not selected_date:
+        return [], [], []
+
+    df_consultas, df_alerta, _ = cached_get_consulta_data(df_utente, data_limite_custom=selected_date)
+    df_utente_info = get_utente_data()
+
+    df_alerta = df_alerta.copy()
+    df_utente_info = df_utente_info.copy()
+
+    df_alerta["PROCESSO"] = pd.to_numeric(df_alerta["PROCESSO"], errors="coerce")
+    df_utente_info["PROCESSO"] = pd.to_numeric(df_utente_info["PROCESSO"], errors="coerce")
+    df_utente_info["DATA_OBITO"] = pd.to_datetime(df_utente_info["DATA_OBITO"], errors="coerce")
+
+    df_alerta = df_alerta.merge(
+        df_utente_info[["PROCESSO", "DATA_OBITO"]],
+        on="PROCESSO",
+        how="left"
+    )
+
+    include_deceased = "include" in include_deceased_values
+    if not include_deceased:
+        df_alerta = df_alerta[df_alerta["DATA_OBITO"].isna()]
+
+    df_alerta["DATA_OBITO"] = df_alerta["DATA_OBITO"].dt.strftime("%Y-%m-%d")
+
+    dropdown_options = [{"label": str(p), "value": p} for p in df_alerta["PROCESSO"].unique()]
+    table_columns = [{"name": col, "id": col} for col in df_alerta.columns]
+    table_data = df_alerta.to_dict("records")
+
+    return dropdown_options, table_columns, table_data
+
+# Update Consultas Plot
 @app.callback(
     Output("consultas-plot", "figure"),
-    Input("processo-dropdown-consultas", "value")  # Ensure the dropdown ID matches
+    Input("processo-dropdown-consultas", "value"),
+    Input("consulta-date-picker", "date"),
+    Input("interval-component", "n_intervals")
 )
-def update_consultas_plot(selected_process):
-    if not selected_process:
+def update_consultas_plot(selected_process, selected_date, n_intervals):
+    if not selected_process or not selected_date:
         return go.Figure()
 
-    filtered_df = df_consultas[df_consultas["PROCESSO"] == selected_process]
+    df_consultas, _, _ = cached_get_consulta_data(df_utente, data_limite_custom=selected_date)
+    df_filtered = df_consultas[df_consultas["PROCESSO"] == selected_process]
 
-    # Create scatter plot with AGENDA_PROTECTED as the color
-    fig = px.scatter(filtered_df, 
-                     x="DATACONSULTA", 
-                     y="CODTIPOACTIVIDADE", 
-                     color="AGENDA_PROTECTED",  # Set color by AGENDA_PROTECTED
-                     title=f"Consultas do Processo {selected_process}",
-                     labels={"DATACONSULTA": "Data da Consulta", 
-                             "CODTIPOACTIVIDADE": "Tipo de Atividade",
-                             "AGENDA_PROTECTED": "Agenda Descrição"})
+    if df_filtered.empty:
+        return go.Figure()
+
+    # Convert once, safely
+    df_filtered = df_filtered.copy()
+    df_filtered["CODTIPOACTIVIDADE"] = pd.to_numeric(df_filtered["CODTIPOACTIVIDADE"], errors="coerce").astype("Int64")
+
+    tipo_map = {
+        1: "PRIMEIRA CONSULTA",
+        2: "CONSULTA SUBSEQUENTE"
+    }
+    df_filtered["TIPO_ACTIVIDADE_DESC"] = df_filtered["CODTIPOACTIVIDADE"].map(tipo_map).fillna("OUTRO")
+
+    fig = px.scatter(
+        df_filtered.sort_values("DATACONSULTA"),
+        x="DATACONSULTA",
+        y="TIPO_ACTIVIDADE_DESC",
+        color="AGENDA_PROTECTED",
+        title=f"Consultas do Processo {selected_process}",
+        labels={
+            "DATACONSULTA": "Data da Consulta",
+            "TIPO_ACTIVIDADE_DESC": "Tipo de Atividade",
+            "AGENDA_PROTECTED": "Descrição da Agenda"
+        }
+    )
 
     fig.update_layout(
         xaxis_title="Data da Consulta",
         yaxis_title="Tipo de Atividade",
-        showlegend=True  # Show the legend for different AGENDA_PROTECTED values
+        showlegend=True
     )
 
     return fig
 
-
-
-# RUN APP_____________________________________________________________________________________________________________________________________________________________
+# Run the app
 server = app.server
 if __name__ == "__main__":
     app.run_server(debug=True)
+
+
+
+
