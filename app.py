@@ -8,14 +8,11 @@ from sqlalchemy import create_engine
 import re
 
 #_____________________________________________________________________________________________SQL CREDENTIALS___________________________________________________________
-user = 'root'
-password = '2444666668888888'
-host = 'localhost'  
-port = '3306'       
-database = 'hospital_data'
+import os
+from sqlalchemy import create_engine
 
-# Create connection string
-engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
 
 #_____________________________________________________________________________________________DATA FROM EXCEL TO SQL and to python__________________________________
 excel_file = 'Cancro_da_Mama_dados_03-01-2025.xlsx'
