@@ -4,4 +4,5 @@ pandas
 plotly
 sqlalchemy
 psycopg2-binary
+flask_caching
 gunicorn
