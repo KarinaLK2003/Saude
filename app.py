@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 import re
+from app import server  # obrigatório para Render reconhecer o WSGI server
+
 
 #_____________________________________________________________________________________________SQL CREDENTIALS___________________________________________________________
 import os
@@ -557,7 +559,9 @@ def update_consultas_plot(selected_process, selected_date, n_intervals):
     return fig
 
 # Run the app
-server = app.server
+app = Dash(__name__)
+server = app.server  # necessário para gunicorn/Render
+
 if __name__ == "__main__":
     app.run_server(debug=True)
 
