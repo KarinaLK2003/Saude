@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 import re
-from app import server  # obrigatório para Render reconhecer o WSGI server
 
 
 #_____________________________________________________________________________________________SQL CREDENTIALS___________________________________________________________
