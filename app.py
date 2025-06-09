@@ -11,57 +11,34 @@ import re
 import os
 from sqlalchemy import create_engine
 
+# Use environment variable from Render
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Fallback for local testing (optional)
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql://root:AsAeIRM76j8npdz1hc20s2eoncZZH9Fy@dpg-d10spdi4d50c73b54dsg-a.oregon-postgres.render.com/hospital_data"
+
+# Connect to PostgreSQL
 engine = create_engine(DATABASE_URL)
 
-#_____________________________________________________________________________________________DATA FROM EXCEL TO SQL and to python__________________________________
-excel_file = 'Cancro_da_Mama_dados_03-01-2025.xlsx'
+# ----------------------------------------
+# LOAD DATA FROM DATABASE
+# ----------------------------------------
 
-# Read Excel sheets
-df_utente = pd.read_excel(excel_file, sheet_name='universo de doentes')
-df_utente.rename(columns={"DATA DIAGNÓSTICO": "DATA_DIAGNOSTICO"}, inplace=True)
+# Load all necessary tables
+df_utente = pd.read_sql("SELECT * FROM universo_de_doentes", con=engine)
+df_consultas = pd.read_sql("SELECT * FROM consultas_realizadas_marcadas", con=engine)
+df_med = pd.read_sql("SELECT * FROM medicacao", con=engine)
 
-df_consultas = pd.read_excel(excel_file, sheet_name='consultas realizadas marcadas')
-df_consultas.drop_duplicates(inplace=True)
-df_consultas["PROCESSO"] = df_consultas["PROCESSO"].astype(str)
-df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors="coerce")
+df_utente.columns = df_utente.columns.str.upper()
+df_consultas.columns = df_consultas.columns.str.upper()
+df_med.columns = df_med.columns.str.upper()
 
-df_med = pd.read_excel(excel_file, sheet_name='medicação')
-
-# Ensure PROCESSO is string to match for merging
+# Ensure correct types
 df_utente["PROCESSO"] = df_utente["PROCESSO"].astype(str)
+df_consultas["PROCESSO"] = df_consultas["PROCESSO"].astype(str)
 df_med["PROCESSO"] = df_med["PROCESSO"].astype(str)
-
-# 1. FILTER df_utente: remove already existing PROCESSOs
-existing_utente = pd.read_sql("SELECT PROCESSO FROM universo_de_doentes", con=engine)
-existing_utente["PROCESSO"] = existing_utente["PROCESSO"].astype(str)
-df_utente_to_insert = df_utente[~df_utente["PROCESSO"].isin(existing_utente["PROCESSO"])]
-
-# 2. INSERT new utentes first (so FK constraint is satisfied for consultas)
-if not df_utente_to_insert.empty:
-    df_utente_to_insert.to_sql('universo_de_doentes', con=engine, if_exists='append', index=False)
-
-# 3. FILTER df_consultas: remove if not matching PROCESSO in universo_de_doentes (FK constraint)
-all_processos = pd.read_sql("SELECT PROCESSO FROM universo_de_doentes", con=engine)
-all_processos["PROCESSO"] = all_processos["PROCESSO"].astype(str)
-df_consultas = df_consultas[df_consultas["PROCESSO"].isin(all_processos["PROCESSO"])]
-
-# 4. FILTER df_consultas: avoid inserting duplicates (based on PROCESSO + DATACONSULTA)
-existing_consultas = pd.read_sql("SELECT PROCESSO, DATACONSULTA FROM consultas_realizadas_marcadas", con=engine)
-existing_consultas["PROCESSO"] = existing_consultas["PROCESSO"].astype(str)
-existing_consultas["DATACONSULTA"] = pd.to_datetime(existing_consultas["DATACONSULTA"], errors="coerce")
-
-merged = df_consultas.merge(existing_consultas, on=["PROCESSO", "DATACONSULTA"], how="left", indicator=True)
-df_consultas_to_insert = merged[merged["_merge"] == "left_only"].drop(columns=["_merge"])
-
-# 5. INSERT filtered consultas
-if not df_consultas_to_insert.empty:
-    df_consultas_to_insert.to_sql('consultas_realizadas_marcadas', con=engine, if_exists='append', index=False)
-
-# 6. INSERT medicação (optional filter here too if needed)
-df_med.to_sql('medicacao', con=engine, if_exists='append', index=False)
-
-# Note: Removed the duplicate to_sql() calls below that caused duplicate primary key errors!
+df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors="coerce")
 
 #______________________________________________________________________________________________TRATAMENTO DE DADOS__________________________________________________
 # TRATAMENTO DE MEDICAÇÃO________________________________________________________________________________________________________________________________
@@ -89,6 +66,8 @@ df_grouped = df.groupby(["PROCESSO", "DESIGN_ARTIGO", "Grupo"]).agg(
 ).reset_index()
 
 df_grouped["Finish"] += pd.Timedelta(days=30)
+
+
 
 # Aggregate cost per year
 df["Year"] = df["DATA_DISPENSA"].dt.year
@@ -139,8 +118,6 @@ def normalizar_descricoes(texto):
 
 df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_PROTECTED'].apply(normalizar_descricoes)
 
-print(df)
-
 #____________________________________________________________________________________________________REFRESH FUNCTIONS________________________________
 
 def get_utente_data():
@@ -156,75 +133,75 @@ def get_utente_data():
 
 
 def get_consulta_data(df_utente, data_limite_custom=None):
-    query = "SELECT * FROM consultas_realizadas_marcadas"
-    df = pd.read_sql(query, con=engine)
+    df_consultas = pd.read_sql("SELECT * FROM consultas_realizadas_marcadas", con=engine)
+    df_consultas.columns = df_consultas.columns.str.upper()
+    df_consultas["PROCESSO"] = df_consultas["PROCESSO"].astype(str)
+    df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors="coerce")
 
-    df = df.drop_duplicates()
-    df = df.dropna(subset=["PROCESSO", "DATACONSULTA"])
-    df["CODTIPOACTIVIDADE"] = df["CODTIPOACTIVIDADE"].fillna("DESCONHECIDO")
-    df["PROCESSO"] = df["PROCESSO"].astype(int)
-    df["DATACONSULTA"] = pd.to_datetime(df["DATACONSULTA"], errors='coerce')
-
+    # Remove duplicates
+    df_consultas = df_consultas.drop_duplicates()
+    df_consultas = df_consultas.dropna(subset=["PROCESSO", "DATACONSULTA"])
+    df_consultas["CODTIPOACTIVIDADE"] = df_consultas["CODTIPOACTIVIDADE"].fillna("DESCONHECIDO")
+    df_consultas["PROCESSO"] = df_consultas["PROCESSO"].astype(int)
+    df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors='coerce')
     data_atual = datetime.today()
-    df = df[df["DATACONSULTA"] <= data_atual]
+    df_consultas = df_consultas[df_consultas["DATACONSULTA"] <= data_atual]
 
-    if "DESCTIPOACTIVIDADE" in df.columns:
-        df["DESCTIPOACTIVIDADE"] = df["DESCTIPOACTIVIDADE"].str.upper().str.strip()
+    if "DESCTIPOACTIVIDADE" in df_consultas.columns:
+        df_consultas["DESCTIPOACTIVIDADE"] = df_consultas["DESCTIPOACTIVIDADE"].str.upper().str.strip()
 
-    df.drop(columns=[
-        'TIPO', 'ACTIVIDADE', 'MEDICO', 'DESCTIPOACTIVIDADE',
-        'NCITA', 'CODGRUPOAGENDA', 'SERVICOAGENDA'
-    ], errors='ignore', inplace=True)
+    df_consultas.drop(columns=['TIPO', 'ACTIVIDADE', 'MEDICO', 'DESCTIPOACTIVIDADE', 'NCITA', 'CODGRUPOAGENDA', 'SERVICOAGENDA'], inplace=True)
 
-    # Set date limit for alerts
-    if data_limite_custom is not None:
-        data_limite = pd.to_datetime(data_limite_custom)
-    else:
-        data_limite = datetime.today() - timedelta(days=365)
-
-    # Filter valid processes
     df_utente_filtered = df_utente[df_utente["DATA_OBITO"].isna()]
+
     processos_validos = df_utente_filtered["PROCESSO"].dropna().astype(int).unique()
 
-    # Last consultation date per process
-    df_ultima_consulta = df.groupby("PROCESSO")["DATACONSULTA"].max().reset_index()
-
-    # Alert: processes without recent consultations
+    df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors='coerce')
+    df_ultima_consulta = df_consultas.groupby("PROCESSO")["DATACONSULTA"].max().reset_index()
+    data_limite = datetime.today() - timedelta(days=365)
     df_alerta = df_ultima_consulta[df_ultima_consulta["DATACONSULTA"] < data_limite]
     df_alerta = df_alerta[df_alerta["PROCESSO"].isin(processos_validos)]
     df_alerta = df_alerta.sort_values(by="DATACONSULTA", ascending=True)
     df_alerta["DATACONSULTA"] = df_alerta["DATACONSULTA"].dt.strftime("%d/%m/%Y")
+
     num_processos_alerta = df_alerta.shape[0]
 
     # Clean agenda descriptions
     def remover_nomes(texto):
-        return re.sub(r'\b(DR(?:A)?\.?\s*[A-ZÁÉÍÓÚÃÕÇ]+(?:\s+[A-ZÁÉÍÓÚÃÕÇ\.]+)*)', '', str(texto), flags=re.IGNORECASE).strip()
+        return re.sub(r'\b(DR(?:A)?\.?\s*[A-ZÁÉÍÓÚÃÕÇ]+(?:\s+[A-ZÁÉÍÓÚÃÕÇ\.]+)*)', '', texto, flags=re.IGNORECASE).strip()
+
+    df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_DESC'].apply(remover_nomes)
 
     def normalizar_descricoes(texto):
-        texto = str(texto).upper()
+        texto = texto.upper()
         texto = re.sub(r'\bGERAL ONC\.?\b', 'GERAL ONCOLOGIA', texto)
         texto = re.sub(r'\bCONS\. ENF\.?\b', 'CONSULTA ENFERMAGEM', texto)
         texto = re.sub(r'\bONC\.?\b', 'ONCOLOGIA', texto)
-        texto = re.sub(r'\s{2,}', ' ', texto)
+        texto = re.sub(r'\s{2,}', ' ', texto)  # Remove multiple spaces
         return texto.strip(' -')
 
-    df['AGENDA_PROTECTED'] = df['AGENDA_DESC'].apply(remover_nomes)
-    df['AGENDA_PROTECTED'] = df['AGENDA_PROTECTED'].apply(normalizar_descricoes)
+    df_consultas['AGENDA_PROTECTED'] = df_consultas['AGENDA_PROTECTED'].apply(normalizar_descricoes)
 
-    return df, df_alerta, num_processos_alerta
+    return df_consultas, df_alerta, num_processos_alerta
 
 
 def get_medicacao_data():
-    query = "SELECT * FROM medicacao"
-    df = pd.read_sql(query, con=engine)
 
-    df = df.drop(columns=['TRATAMENTO'], errors='ignore')
-    df = df[df["QUANT"] > 0]
+    df_med = pd.read_sql("SELECT * FROM medicacao", con=engine)
+
+    df_med.columns = df_med.columns.str.upper()
+
+    df_med["PROCESSO"] = df_med["PROCESSO"].astype(str)
+
+    df = df_med.drop(columns=['TRATAMENTO'])
+    df = df.loc[df["QUANT"] > 0]
     df["DATA_DISPENSA"] = pd.to_datetime(df["DATA_DISPENSA"], dayfirst=True)
     df.sort_values(by=["PROCESSO", "DESIGN_ARTIGO", "DATA_DISPENSA"], inplace=True)
 
-    # Continuous treatment logic
+    # Define max interval for continuous treatment
     intervalo_maximo = 40  # days
+
+    # Create an identifier for continuous periods
     df["Grupo"] = (
         df.groupby(["PROCESSO", "DESIGN_ARTIGO"])["DATA_DISPENSA"]
         .diff()
@@ -232,13 +209,17 @@ def get_medicacao_data():
         .cumsum()
     )
 
+    # Determine start and end of each continuous period
     df_grouped = df.groupby(["PROCESSO", "DESIGN_ARTIGO", "Grupo"]).agg(
         Start=("DATA_DISPENSA", "min"),
         Finish=("DATA_DISPENSA", "max"),
-        Cost=("VALOR", "sum")
+        Cost=("VALOR", "sum")  # Summing cost for each period
     ).reset_index()
+
     df_grouped["Finish"] += pd.Timedelta(days=30)
 
+
+    # Aggregate cost per year
     df["Year"] = df["DATA_DISPENSA"].dt.year
     df_yearly_cost = df.groupby("Year")["VALOR"].sum().reset_index()
 
@@ -342,8 +323,9 @@ def update_content(active_tab, n_intervals):
     Input("interval-component", "n_intervals")
 )
 def update_cost_barplot(selected_processes, selected_medications, selected_years, n_intervals):
-    filtered_df = get_medicacao_data()[0]
-    df_yearly_cost = get_medicacao_data()[2]
+    df, _, df_yearly_cost = cached_get_medicacao_data()
+    filtered_df = df.copy()
+
 
     # Filter based on selections
     if selected_processes:
@@ -501,6 +483,8 @@ def update_alerta_dropdown_and_table(selected_date, include_deceased_values, n_i
 
     df_alerta = df_alerta.copy()
     df_utente_info = df_utente_info.copy()
+    df_utente_info.columns = df_utente_info.columns.str.strip().str.upper()
+    print(df_utente_info)
 
     df_alerta["PROCESSO"] = pd.to_numeric(df_alerta["PROCESSO"], errors="coerce")
     df_utente_info["PROCESSO"] = pd.to_numeric(df_utente_info["PROCESSO"], errors="coerce")
