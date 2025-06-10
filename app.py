@@ -558,7 +558,6 @@ def update_consultas_plot(selected_process, selected_date, n_intervals):
     return fig
 
 # Run the app
-app = Dash(__name__)
 server = app.server  # necessário para gunicorn/Render
 
 if __name__ == "__main__":
