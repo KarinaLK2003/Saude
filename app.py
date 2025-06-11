@@ -1,11 +1,15 @@
 import pandas as pd
 import plotly.express as px
-from dash import Dash, dcc, html, Input, Output, dash_table
+from dash import Dash, dcc, html, Input, Output, dash_table, State
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 import re
+import io
+import dash
+from dash import dcc, html, Input, Output, State
+
 
 
 #_____________________________________________________________________________________________SQL CREDENTIALS___________________________________________________________
@@ -245,7 +249,7 @@ app.layout = dbc.Container([
 
     dbc.Row([dbc.Col(id="medicacao-title", width=12)], className="w-100", style={"height": "50px", "marginBottom": "20px"}),
 
-    # Main tab content placeholder (for df_alert table)
+    # Main tab content placeholder (para a tabela)
     dbc.Row([dbc.Col(id="tab-content", width=12)]),
 
     # Medicação filters & graphs (only shown when tab is 'medicacao')
@@ -423,6 +427,17 @@ def render_tab_content(active_tab):
                 style={"backgroundColor": "#8D0E19", "width": "100%", "padding": "0px", "margin": "0px"}
             ),
 
+                # Botão exportar Excel e componente download
+            dbc.Row([
+                dbc.Col(
+                    html.Button("Exportar Excel", id="btn_export", className="btn btn-primary"),
+                    width="auto",
+                    style={"marginBottom": "10px"}
+                ),
+                dcc.Download(id="download-dataframe-xlsx")
+            ]),
+
+
             dbc.Row([
                 dbc.Col([
                     html.Label("Selecione a data limite para última consulta:"),
@@ -532,39 +547,99 @@ def render_tab_content(active_tab):
     Input("include-deceased-checklist", "value"),
     Input("interval-component", "n_intervals")
 )
-def update_alerta_dropdown_and_table(selected_date, include_deceased_values, n_intervals):
+def update_alerta_dropdown_and_table(selected_date, include_deceased_values, n_intervals, sort_order="asc"):
     if not selected_date:
+        print("Nenhuma data selecionada.")
         return [], [], []
 
-    df_consultas, df_alerta, _ = cached_get_consulta_data(df_utente, data_limite_custom=selected_date)
+    print(f"Data selecionada: {selected_date}")
+
+    df_consultas, _, _ = cached_get_consulta_data(df_utente, data_limite_custom=selected_date)
     df_utente_info = get_utente_data()
 
-    df_alerta = df_alerta.copy()
-    df_utente_info = df_utente_info.copy()
-    df_utente_info.columns = df_utente_info.columns.str.strip().str.upper()
-    print(df_utente_info)
+    print(f"Consultas carregadas: {len(df_consultas)} registros")
+    print(f"Info utente carregada: {len(df_utente_info)} registros")
 
-    df_alerta["PROCESSO"] = pd.to_numeric(df_alerta["PROCESSO"], errors="coerce")
+    df_utente_info = df_utente_info.copy()
+    df_consultas = df_consultas.copy()
+
+    df_utente_info.columns = df_utente_info.columns.str.strip().str.upper()
     df_utente_info["PROCESSO"] = pd.to_numeric(df_utente_info["PROCESSO"], errors="coerce")
     df_utente_info["DATA_OBITO"] = pd.to_datetime(df_utente_info["DATA_OBITO"], errors="coerce")
 
-    df_alerta = df_alerta.merge(
-        df_utente_info[["PROCESSO", "DATA_OBITO"]],
-        on="PROCESSO",
-        how="left"
+    df_consultas["PROCESSO"] = pd.to_numeric(df_consultas["PROCESSO"], errors="coerce")
+    df_consultas["DATACONSULTA"] = pd.to_datetime(df_consultas["DATACONSULTA"], errors="coerce")
+
+    # Última consulta por utente
+    ultima_consulta_por_paciente = (
+        df_consultas.groupby("PROCESSO")["DATACONSULTA"]
+        .max()
+        .reset_index()
     )
 
+    print(f"Última consulta por paciente (exemplo):\n{ultima_consulta_por_paciente.head()}")
+
+    # Filtra pacientes cuja última consulta foi até a data selecionada
+    pacientes_filtrados = ultima_consulta_por_paciente[
+        ultima_consulta_por_paciente["DATACONSULTA"] <= pd.to_datetime(selected_date)
+    ]
+
+    print(f"Número de pacientes filtrados pela data da última consulta: {len(pacientes_filtrados)}")
+
+    # Junta info do utente com a última consulta filtrada
+    df_mostra = df_utente_info.merge(
+        pacientes_filtrados,
+        on="PROCESSO",
+        how="inner"
+    )
+
+    # Filtra falecidos se checkbox não incluir
     include_deceased = "include" in include_deceased_values
+    print(f"Incluir falecidos? {include_deceased}")
+
     if not include_deceased:
-        df_alerta = df_alerta[df_alerta["DATA_OBITO"].isna()]
+        df_mostra = df_mostra[df_mostra["DATA_OBITO"].isna()]
 
-    df_alerta["DATA_OBITO"] = df_alerta["DATA_OBITO"].dt.strftime("%Y-%m-%d")
+    print(f"Total de utentes após filtragem por óbito: {len(df_mostra)}")
 
-    dropdown_options = [{"label": str(p), "value": p} for p in df_alerta["PROCESSO"].unique()]
-    table_columns = [{"name": col, "id": col} for col in df_alerta.columns]
-    table_data = df_alerta.to_dict("records")
+    # Ordena por data da última consulta conforme parâmetro sort_order
+    ascending = True if sort_order == "asc" else False
+    df_mostra = df_mostra.sort_values(by="DATACONSULTA", ascending=ascending)
+
+    # Ajusta formato da data de óbito para exibição
+    df_mostra["DATA_OBITO"] = df_mostra["DATA_OBITO"].dt.strftime("%Y-%m-%d")
+
+    # Cria dropdown e dados da tabela
+    dropdown_options = [{"label": str(p), "value": p} for p in df_mostra["PROCESSO"].unique()]
+    table_columns = [{"name": col, "id": col} for col in df_mostra.columns]
+    table_data = df_mostra.to_dict("records")
+
+    print(f"Opções no dropdown: {len(dropdown_options)}")
+    print(f"Colunas da tabela: {table_columns}")
 
     return dropdown_options, table_columns, table_data
+
+
+@app.callback(
+    Output("download-dataframe-xlsx", "data"),
+    Input("btn_export", "n_clicks"),
+    State("alerta-table", "data"),
+    prevent_initial_call=True,
+)
+def export_to_excel(n_clicks, table_data):
+    if not n_clicks:
+        return dash.no_update
+
+    if not table_data:
+        return dash.no_update
+
+    # Converte os dados da tabela (lista de dicts) para DataFrame
+    df_export = pd.DataFrame(table_data)
+
+    # Opcional: podes definir um nome dinâmico para o ficheiro
+    filename = "dados_alerta.xlsx"
+
+    return dcc.send_data_frame(df_export.to_excel, filename, sheet_name="Dados", index=False)
 
 # Update Consultas Plot
 @app.callback(
