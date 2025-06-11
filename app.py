@@ -609,6 +609,12 @@ def update_alerta_dropdown_and_table(selected_date, include_deceased_values, n_i
     # Ajusta formato da data de óbito para exibição
     df_mostra["DATA_OBITO"] = df_mostra["DATA_OBITO"].dt.strftime("%Y-%m-%d")
 
+    # Reordenar colunas: PROCESSO, DATACONSULTA, (restantes)
+    cols = df_mostra.columns.tolist()
+    cols.insert(1, cols.pop(cols.index("DATACONSULTA")))  # move DATACONSULTA para a 2ª posição
+    df_mostra = df_mostra[cols]
+
+
     # Cria dropdown e dados da tabela
     dropdown_options = [{"label": str(p), "value": p} for p in df_mostra["PROCESSO"].unique()]
     table_columns = [{"name": col, "id": col} for col in df_mostra.columns]
