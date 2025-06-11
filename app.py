@@ -465,6 +465,63 @@ def render_tab_content(active_tab):
 
             dcc.Graph(id="consultas-plot")
         ])
+    
+    elif active_tab == "utentes":
+        df_utente_display = df_utente.copy()
+        data_nascimento_dt = pd.to_datetime(df_utente_display["DATA_NASCIMENTO"], errors="coerce")
+        df_utente_display["IDADE"] = datetime.today().year - data_nascimento_dt.dt.year
+
+
+        age_distribution_fig = px.histogram(df_utente_display, x="IDADE", nbins=20,
+                                            title="Distribuição Etária dos Utentes")
+
+        gender_distribution_fig = px.pie(df_utente_display, names="SEXO_DESC",
+                                         title="Distribuição por Sexo")
+
+        district_counts = df_utente_display["DISTRITO_RESIDENCIA"].value_counts().reset_index()
+        district_counts.columns = ["DISTRITO", "NUM_UTENTES"]
+        location_fig = px.bar(district_counts, x="DISTRITO", y="NUM_UTENTES",
+                              title="Número de Utentes por Distrito")
+
+        summary_cards = dbc.Row([
+            dbc.Col(dbc.Card([
+                dbc.CardBody([
+                    html.H4("Total de Utentes", className="card-title"),
+                    html.P(f"{len(df_utente_display):,}", className="card-text")
+                ])
+            ], color="primary", inverse=True), width=4),
+
+            dbc.Col(dbc.Card([
+                dbc.CardBody([
+                    html.H4("Número de Óbitos", className="card-title"),
+                    html.P(f"{df_utente['DATA_OBITO'].notna().sum():,}", className="card-text")
+                ])
+            ], color="danger", inverse=True), width=4),
+
+            dbc.Col(dbc.Card([
+                dbc.CardBody([
+                    html.H4("Idade Média", className="card-title"),
+                    html.P(f"{df_utente_display['IDADE'].mean():.1f} anos", className="card-text")
+                ])
+            ], color="info", inverse=True), width=4),
+        ], className="mb-4")
+
+        return html.Div([
+            html.Div(
+                html.H1("Utentes",
+                        style={"color": "white", "margin": "0 auto", "padding": "10px", "textAlign": "left"}),
+                style={"backgroundColor": "#8D0E19", "width": "100%", "padding": "0px", "margin": "0px"}
+            ),
+
+            summary_cards,
+
+            dbc.Row([
+                dbc.Col(dcc.Graph(figure=age_distribution_fig), width=4),
+                dbc.Col(dcc.Graph(figure=gender_distribution_fig), width=4),
+                dbc.Col(dcc.Graph(figure=location_fig), width=4)
+            ])
+        ])
+
 
 # Update Alert Dropdown and Table
 @app.callback(
