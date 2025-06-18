@@ -1,0 +1,24 @@
+Copyright © 2025 KLM
+
+Este projeto é propriedade intelectual de Karina Kozyar, Leonor Santana e Matilde Alves. 
+Todos os direitos reservados.
+
+É proibida a cópia, modificação, redistribuição ou reutilização 
+deste código ou partes dele sem autorização prévia por escrito.
+
+Projeto entregue exclusivamente para fins académicos na ISCTE-Sintra.
+
+Data de criação: 18/06/2025
+
+
+Copyright © 2025 KLM
+
+All rights reserved.
+
+This project and its contents are the intellectual property of Karina Kozyar, Leonor Santana e Matilde Alves. 
+Unauthorized copying, modification, distribution, or use of this code 
+or any part of it is strictly prohibited without written permission.
+
+Submitted exclusively for academic purposes at ISCTE-Sintra.
+
+Created on: 18/06/2025
